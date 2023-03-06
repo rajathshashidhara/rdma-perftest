@@ -494,6 +494,13 @@ static void usage(const char *argv0, VerbType verb, TestType tst, int connection
 		printf(" Set the payload by passing a txt file containing a pattern in the next form(little endian): '0xaaaaaaaa, 0xbbbbbbbb, ...' .\n");
 	}
 
+	if (tst == BW) {
+		printf("      --touch_memory ");
+		printf(" touch the recevied buffer on the server.\n");
+		printf("      --inject_op_cycles=<cyc> ");
+		printf(" inject per-operation cpu cycles to emulate processing.\n");
+	}
+
 	printf(" Latency measurement is Average calculation \n");
 
 	printf("      --use_old_post_send");
@@ -829,6 +836,8 @@ static void init_perftest_params(struct perftest_parameters *user_param)
 	user_param->disable_pcir		= 0;
 	user_param->source_ip		= NULL;
 	user_param->has_source_ip	= 0;
+	user_param->touch_memory 	 = OFF;
+	user_param->inject_op_cycles = 0;
 }
 
 static int open_file_write(const char* file_path)
@@ -2225,6 +2234,8 @@ int parser(struct perftest_parameters *user_param,char *argv[], int argc)
 	static int credentials_path_flag = 0;
 	static int data_enc_key_app_path_flag = 0;
 	#endif
+	static int touch_mem_flag = 0;
+	static int injected_op_cycles_flag = 0;
 
 	char *server_ip = NULL;
 	char *client_ip = NULL;
@@ -2378,6 +2389,8 @@ int parser(struct perftest_parameters *user_param,char *argv[], int argc)
 			{.name = "use_ooo", .has_arg = 0, .flag = &use_ooo_flag, .val = 1},
 			#endif
 			{.name = "source_ip", .has_arg = 1, .flag = &source_ip_flag, .val = 1},
+			{.name = "touch-memory", .has_arg = 0, .flag = &touch_mem_flag, .val = 1},
+			{.name = "inject-op-cycles", .has_arg = 1, .flag = &injected_op_cycles_flag, .val = 1},
 			{0}
 		};
 		c = getopt_long(argc,argv,"w:y:p:d:i:m:s:n:t:u:S:x:c:q:I:o:M:r:Q:A:l:D:f:B:T:L:E:J:j:K:k:X:W:aFegzRvhbNVCHUOZP",long_options,NULL);
@@ -2888,6 +2901,15 @@ int parser(struct perftest_parameters *user_param,char *argv[], int argc)
 					log_active_dci_streams_flag_was_ever_set = 1;
 				}
 				#endif
+				if (touch_mem_flag) {
+					user_param->touch_memory = 1;
+					GET_STRING(user_param->source_ip, strdupa(optarg));
+					touch_mem_flag = 0;
+				}
+				if (injected_op_cycles_flag) {
+					user_param->inject_op_cycles = atoi(optarg);
+					injected_op_cycles_flag = 0;
+				}
 				break;
 			default:
 				  fprintf(stderr," Invalid Command or flag.\n");

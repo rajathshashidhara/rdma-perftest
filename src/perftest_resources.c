@@ -3907,6 +3907,63 @@ static inline void set_on_first_rx_packet(struct perftest_parameters *user_param
 /******************************************************************************
  *
  ******************************************************************************/
+static inline uint32_t kill_cycles(uint32_t cyc, uint32_t opaque)
+{
+  uint64_t start = get_cycles();
+  uint64_t end = start + cyc;
+
+  if (end >= start) {
+    while (get_cycles() < end) {
+      opaque = opaque * 42 + 37;
+      opaque ^= 0x12345678;
+      opaque = opaque * 42 + 37;
+      opaque ^= 0x87654321;
+    }
+  } else {
+    while (get_cycles() >= start || get_cycles() < end) {
+      opaque = opaque * 42 + 37;
+      opaque ^= 0x12345678;
+      opaque = opaque * 42 + 37;
+      opaque ^= 0x87654321;
+    }
+  }
+  return opaque;
+}
+
+static inline uint64_t touch(const void *buf, size_t len)
+{
+  uint64_t x = 0;
+  size_t off = 0, avail;
+
+  while (off < len) {
+    avail = len - off;
+    if (avail >= 32) {
+      x += *(const uint64_t *) ((const uint8_t *) buf + off);
+      x += *(const uint64_t *) ((const uint8_t *) buf + off + 8);
+      x += *(const uint64_t *) ((const uint8_t *) buf + off + 16);
+      x += *(const uint64_t *) ((const uint8_t *) buf + off + 24);
+      off += 32;
+    } else if (avail >= 16) {
+      x += *(const uint64_t *) ((const uint8_t *) buf + off);
+      x += *(const uint64_t *) ((const uint8_t *) buf + off + 8);
+      off += 16;
+    } else if (avail >= 8) {
+      x += *(const uint64_t *) ((const uint8_t *) buf + off);
+      off += 8;
+    } else if (avail >= 4) {
+      x += *(const uint32_t *) ((const uint8_t *) buf + off);
+      off += 4;
+    } else if (avail >= 2) {
+      x += *(const uint16_t *) ((const uint8_t *) buf + off);
+      off += 2;
+    } else {
+      x += *(const uint8_t *) buf + off;
+      off++;
+    }
+  }
+  return x;
+}
+
 int run_iter_bw_server(struct pingpong_context *ctx, struct perftest_parameters *user_param)
 {
 	uint64_t		rcnt = 0;
@@ -3928,6 +3985,7 @@ int run_iter_bw_server(struct pingpong_context *ctx, struct perftest_parameters 
 	uintptr_t		primary_recv_addr = ctx->recv_sge_list[0].addr;
 	int			recv_flows_burst = 0;
 	int			address_flows_offset =0;
+	uint32_t	kill_cyc_handle = 0;
 
 	#ifdef HAVE_IBV_WR_API
 	if (user_param->connection_type != RawEth)
@@ -3997,6 +4055,15 @@ int run_iter_bw_server(struct pingpong_context *ctx, struct perftest_parameters 
 					rcnt++;
 					unused_recv_for_qp[wc_id]++;
 					check_alive_data.current_totrcnt = rcnt;
+
+					if (user_param->touch_memory == ON) {
+						touch((void *) ctx->rwr[wc_id * user_param->recv_post_list].sg_list->addr,
+							ctx->rwr[wc_id * user_param->recv_post_list].sg_list->length);
+					}
+
+					if (user_param->inject_op_cycles > 0) {
+						kill_cyc_handle = kill_cycles(user_param->inject_op_cycles, kill_cyc_handle);
+					}
 
 					if (user_param->test_type==DURATION && user_param->state == SAMPLE_STATE) {
 						if (user_param->report_per_port) {

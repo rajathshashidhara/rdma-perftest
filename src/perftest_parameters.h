@@ -621,6 +621,8 @@ struct perftest_parameters {
 	char				*source_ip;
 	int 				has_source_ip;
 	int 			ah_allocated;
+	int				touch_memory;
+	int				inject_op_cycles;
 };
 
 struct report_options {
