@@ -15,9 +15,9 @@
 #include <sys/ipc.h>
 #include <sys/shm.h>
 #include <pthread.h>
-#if defined(__FreeBSD__)
+#include <fcntl.h>
+#include <unistd.h>
 #include <sys/stat.h>
-#endif
 
 #ifdef HAVE_CONFIG_H
 #include <config.h>
@@ -1946,7 +1946,7 @@ int create_single_mr(struct pingpong_context *ctx, struct perftest_parameters *u
 		} else {
 			if (user_param->has_payload_modification) {
 				int i;
-				int payload_len = strlen(user_param->payload_content);
+				int payload_len = user_param->payload_content_len;
 				for (i = 0; i < ctx->buff_size; i++) {
 					((char*)ctx->buf[qp_index])[i] = user_param->payload_content[i % payload_len];
 				}
@@ -1964,78 +1964,40 @@ int create_single_mr(struct pingpong_context *ctx, struct perftest_parameters *u
 static int create_payload(struct perftest_parameters *user_param)
 {
 	char* file_content;
-	char* token;
-	int payload_file_size;
-	int counter = 0;
-	FILE* fptr;
+	size_t payload_file_size;
+	int fd;
+	struct stat finfo;
 
-	/* read payload text file */
-	fptr = fopen(user_param->payload_file_path, "r");
-	if (!fptr)
-	{
+	/* open payload file */
+	fd = open(user_param->payload_file_path, O_RDONLY);
+	if (fd == -1) {
 		fprintf(stderr, "Failed to open '%s'\n", user_param->payload_file_path);
 		return 1;
 	}
 
-	/* get payload file size*/
-	fseek(fptr, 0, SEEK_END);
-	payload_file_size = ftell(fptr);
-	fseek(fptr, 0, SEEK_SET);
+	if (fstat(fd, &finfo) == -1) {
+		fprintf(stderr, "Failed to stat '%s'\n", user_param->payload_file_path);
+		return 1;
+	}
+
+	payload_file_size = finfo.st_size;
 
 	if (payload_file_size <= 0) {
 		fprintf(stderr, "Payload size should be greater than 0\n");
-		fclose(fptr);
+		close(fd);
 		return 1;
 	}
 
-	/* read payload file content*/
-	ALLOCATE(file_content, char, payload_file_size + 1);
-	if (payload_file_size != fread(file_content, 1, payload_file_size, fptr)) {
-		fprintf(stderr, "Failed to read payload file\n");
-		free(file_content);
-		fclose(fptr);
+	/* mmap payload file content*/
+	if ((file_content = mmap(NULL, payload_file_size, PROT_READ, MAP_SHARED, fd, 0)) == MAP_FAILED) {
+		fprintf(stderr, "Failed to mmap payload file\n");
+		close(fd);
 		return 1;
 	}
 
-	file_content[payload_file_size] = '\0';
-	/* allocate buffer for the payload*/
-	ALLOCATE(user_param->payload_content, char, user_param->size + 1);
-
-	/* get token in DWORD form: '0xaaaaaaaa' */
-	token = strtok(file_content, ",");
-
-	do {
-			int i;
-			char current_byte_chars[2];
-			if (strlen(token) != 10) {
-				fprintf(stderr, "Failed to parse DWORD number: %d\n", counter/4);
-				free(user_param->payload_content);
-				free(file_content);
-				fclose(fptr);
-				return 1;
-			}
-			for(i = 0; i < 8; i += 2){
-				current_byte_chars[0] = token[8-i];
-				current_byte_chars[1] = token[9-i];
-				if (!isxdigit(current_byte_chars[0]) || !isxdigit(current_byte_chars[1])) {
-					fprintf(stderr, "Invalid hex char in DWORD number: %d\n", counter/4);
-					free(user_param->payload_content);
-					free(file_content);
-					fclose(fptr);
-					return 1;
-				}
-				user_param->payload_content[counter] = (char) strtol(current_byte_chars, NULL, 16);
-				counter++;
-				if (counter == user_param->size)
-					break;
-			}
-		token = strtok(NULL, ",\n");
-	} while (token != NULL && counter < user_param->size);
-
-	user_param->payload_content[counter] = '\0';
-
-	free(file_content);
-	fclose(fptr);
+	user_param->payload_content = file_content;
+	user_param->payload_content_len = payload_file_size;
+	close(fd);
 
 	return 0;
 }

@@ -549,6 +549,7 @@ struct perftest_parameters {
 	int				has_payload_modification;
 	char*				payload_file_path;
 	char*				payload_content;
+	size_t				payload_content_len;
 #ifdef HAVE_CUDA
 	int				use_cuda;
 	int				cuda_device_id;

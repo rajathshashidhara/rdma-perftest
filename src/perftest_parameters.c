@@ -755,6 +755,7 @@ static void init_perftest_params(struct perftest_parameters *user_param)
 	user_param->limit_msgrate	= 0;
 	user_param->pkey_index		= 0;
 	user_param->raw_qos		= 0;
+	user_param->payload_content_len = 0;
 	user_param->tcp			= 0;
 	user_param->burst_size		= 0;
 	user_param->typical_pkt_size	= 0;
