@@ -33,6 +33,7 @@ stamp-h1
 # Project/Eclipse
 .cproject
 .project
+.vscode
 
 #Ctags
 tags
@@ -56,3 +57,6 @@ debian/compat
 debian/*.log
 debian/files
 debian/perftest
+
+#Man pages
+man/
