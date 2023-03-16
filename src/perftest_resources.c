@@ -1948,7 +1948,6 @@ int create_single_mr(struct pingpong_context *ctx, struct perftest_parameters *u
 			if (user_param->has_payload_modification) {
 				int i;
 				int payload_len = user_param->payload_content_len;
-				printf("payload_len=%d\n", payload_len);
 				for (i = 0; i < ctx->buff_size; i++) {
 					((char*)ctx->buf[qp_index])[i] = user_param->payload_content[i + user_param->size*qp_index % payload_len]; // allow different qp messages to have different payload
 				}
