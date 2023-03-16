@@ -15,9 +15,9 @@
 #include <sys/ipc.h>
 #include <sys/shm.h>
 #include <pthread.h>
-#if defined(__FreeBSD__)
+#include <fcntl.h>
+#include <unistd.h>
 #include <sys/stat.h>
-#endif
 
 #ifdef HAVE_CONFIG_H
 #include <config.h>
@@ -31,6 +31,7 @@
 
 #include "perftest_resources.h"
 #include "raw_ethernet_resources.h"
+#include <zlib.h>
 
 static enum ibv_wr_opcode opcode_verbs_array[] = {IBV_WR_SEND,IBV_WR_RDMA_WRITE,IBV_WR_RDMA_READ};
 static enum ibv_wr_opcode opcode_atomic_array[] = {IBV_WR_ATOMIC_CMP_AND_SWP,IBV_WR_ATOMIC_FETCH_AND_ADD};
@@ -1875,7 +1876,7 @@ int create_single_mr(struct pingpong_context *ctx, struct perftest_parameters *u
 			flags |= (1 << 5);
 		}
 	}
-
+	
 	if (user_param->verb == WRITE) {
 		flags |= IBV_ACCESS_REMOTE_WRITE;
 	} else if (user_param->verb == READ) {
@@ -1946,9 +1947,10 @@ int create_single_mr(struct pingpong_context *ctx, struct perftest_parameters *u
 		} else {
 			if (user_param->has_payload_modification) {
 				int i;
-				int payload_len = strlen(user_param->payload_content);
+				int payload_len = user_param->payload_content_len;
+				printf("payload_len=%d\n", payload_len);
 				for (i = 0; i < ctx->buff_size; i++) {
-					((char*)ctx->buf[qp_index])[i] = user_param->payload_content[i % payload_len];
+					((char*)ctx->buf[qp_index])[i] = user_param->payload_content[i + user_param->size*qp_index % payload_len]; // allow different qp messages to have different payload
 				}
 			} else {
 				random_data(ctx->buf[qp_index], ctx->buff_size);
@@ -1964,78 +1966,40 @@ int create_single_mr(struct pingpong_context *ctx, struct perftest_parameters *u
 static int create_payload(struct perftest_parameters *user_param)
 {
 	char* file_content;
-	char* token;
-	int payload_file_size;
-	int counter = 0;
-	FILE* fptr;
+	size_t payload_file_size;
+	int fd;
+	struct stat finfo;
 
-	/* read payload text file */
-	fptr = fopen(user_param->payload_file_path, "r");
-	if (!fptr)
-	{
+	/* open payload file */
+	fd = open(user_param->payload_file_path, O_RDONLY);
+	if (fd == -1) {
 		fprintf(stderr, "Failed to open '%s'\n", user_param->payload_file_path);
 		return 1;
 	}
 
-	/* get payload file size*/
-	fseek(fptr, 0, SEEK_END);
-	payload_file_size = ftell(fptr);
-	fseek(fptr, 0, SEEK_SET);
+	if (fstat(fd, &finfo) == -1) {
+		fprintf(stderr, "Failed to stat '%s'\n", user_param->payload_file_path);
+		return 1;
+	}
+
+	payload_file_size = finfo.st_size;
 
 	if (payload_file_size <= 0) {
 		fprintf(stderr, "Payload size should be greater than 0\n");
-		fclose(fptr);
+		close(fd);
 		return 1;
 	}
 
-	/* read payload file content*/
-	ALLOCATE(file_content, char, payload_file_size + 1);
-	if (payload_file_size != fread(file_content, 1, payload_file_size, fptr)) {
-		fprintf(stderr, "Failed to read payload file\n");
-		free(file_content);
-		fclose(fptr);
+	/* mmap payload file content*/
+	if ((file_content = mmap(NULL, payload_file_size, PROT_READ, MAP_SHARED, fd, 0)) == MAP_FAILED) {
+		fprintf(stderr, "Failed to mmap payload file\n");
+		close(fd);
 		return 1;
 	}
 
-	file_content[payload_file_size] = '\0';
-	/* allocate buffer for the payload*/
-	ALLOCATE(user_param->payload_content, char, user_param->size + 1);
-
-	/* get token in DWORD form: '0xaaaaaaaa' */
-	token = strtok(file_content, ",");
-
-	do {
-			int i;
-			char current_byte_chars[2];
-			if (strlen(token) != 10) {
-				fprintf(stderr, "Failed to parse DWORD number: %d\n", counter/4);
-				free(user_param->payload_content);
-				free(file_content);
-				fclose(fptr);
-				return 1;
-			}
-			for(i = 0; i < 8; i += 2){
-				current_byte_chars[0] = token[8-i];
-				current_byte_chars[1] = token[9-i];
-				if (!isxdigit(current_byte_chars[0]) || !isxdigit(current_byte_chars[1])) {
-					fprintf(stderr, "Invalid hex char in DWORD number: %d\n", counter/4);
-					free(user_param->payload_content);
-					free(file_content);
-					fclose(fptr);
-					return 1;
-				}
-				user_param->payload_content[counter] = (char) strtol(current_byte_chars, NULL, 16);
-				counter++;
-				if (counter == user_param->size)
-					break;
-			}
-		token = strtok(NULL, ",\n");
-	} while (token != NULL && counter < user_param->size);
-
-	user_param->payload_content[counter] = '\0';
-
-	free(file_content);
-	fclose(fptr);
+	user_param->payload_content = file_content;
+	user_param->payload_content_len = payload_file_size;
+	close(fd);
 
 	return 0;
 }
@@ -3964,6 +3928,107 @@ static inline uint64_t touch(const void *buf, size_t len)
   return x;
 }
 
+typedef struct { uint64_t state;  uint64_t inc; } pcg32_random_t;
+
+// lightweight PCG32. does good with r % 4. C rand() was too slow when experimenting with FastClick. 
+// https://www.pcg-random.org/download.html
+uint32_t pcg32_random_r(pcg32_random_t* rng)
+{
+	uint64_t oldstate = rng->state;
+	// Advance internal state
+	rng->state = oldstate * 6364136223846793005ULL + (rng->inc|1);
+	// Calculate output function (XSH RR), uses old state for max ILP
+	uint32_t xorshifted = ((oldstate >> 18u) ^ oldstate) >> 27u;
+	uint32_t rot = oldstate >> 59u;
+	return (xorshifted >> rot) | (xorshifted << ((-rot) & 31));
+}
+
+static inline void onehot(int32_t *payload){
+	for (int i = 0 ; i < 64; i++) {
+		payload[i] = 1 << payload[i];
+	}
+}
+
+static inline void clamp(int32_t *payload){
+	int32_t *clamp_payload = payload;
+	int32_t in1;
+	int32_t in2;
+	int32_t in3;
+	for (int i = 0; i < 20; i++){
+		in1 = clamp_payload[0];
+		in2 = clamp_payload[1];
+		in3 = clamp_payload[2];
+
+		if (in1 < in2) {
+			clamp_payload[0] = in2;	
+		} else if (in3 <  in2) {
+			clamp_payload[0] = in3;
+		};
+		// else, payload[0] = in1
+
+		// advance to next 3 inputs
+		clamp_payload = clamp_payload + 3*sizeof(int32_t);
+
+	}
+}
+
+static inline void computeHash(int32_t *payload){
+	int32_t *hash_payload = payload;
+
+	for (int i = 0; i < 16; i++){
+		uint32_t data[4] = {hash_payload[0], hash_payload[1], hash_payload[2], hash_payload[3]};
+		uint32_t crc = crc32(0L, Z_NULL, 0);
+		hash_payload[0] = crc32(crc,(const Bytef*) data, sizeof(data));
+
+		// advance to next 4 inputs
+		hash_payload = hash_payload + 4*sizeof(int32_t);
+	}
+}
+
+static inline void selectRandom(int32_t *payload){
+	int32_t *random_payload = payload;
+	static pcg32_random_t rng;
+	uint32_t res;
+	
+	for (int i = 0; i < 16; i++){
+		res = pcg32_random_r(&rng);
+		res = res % 4;
+		// if res == 0, payload[0] = payload[0]
+		if (res == 1 ) {
+			random_payload[0] = random_payload[1];
+		} else if (res == 2) {
+			random_payload[0] = random_payload[2];
+		} else {
+			random_payload[0] = random_payload[3];
+		}
+
+		// advance to next 4 inputs
+		random_payload = random_payload + 4*sizeof(int32_t);
+	}
+}
+
+// processing about 64 fields for each transformaiton. 
+static inline void preprocess(int32_t *payload){
+	int32_t procs = payload[0]; 
+	printf("procs = %d\n", procs);
+	if (procs & 1){ // 65  fields
+	//	printf("onehot\n");
+		onehot(&payload[1]);
+	}
+	if (procs & 2) { // 60 fields
+	//	printf("clamp\n");
+		clamp(&payload[65]);
+	}
+	if (procs & 4) { // 64 fields
+	//	printf("hash\n");
+		computeHash(&payload[125]);
+	} 
+	if (procs & 16) { // 64 fields
+	//	printf("random select\n");
+		selectRandom(&payload[189]);
+	}
+}
+
 int run_iter_bw_server(struct pingpong_context *ctx, struct perftest_parameters *user_param)
 {
 	uint64_t		rcnt = 0;
@@ -4020,7 +4085,6 @@ int run_iter_bw_server(struct pingpong_context *ctx, struct perftest_parameters 
 	}
 
 	check_alive_data.g_total_iters = tot_iters;
-
 	while (rcnt < tot_iters || (user_param->test_type == DURATION && user_param->state != END_STATE)) {
 
 		if (user_param->use_event) {
@@ -4060,8 +4124,11 @@ int run_iter_bw_server(struct pingpong_context *ctx, struct perftest_parameters 
 						touch((void *) ctx->rwr[wc_id * user_param->recv_post_list].sg_list->addr,
 							ctx->rwr[wc_id * user_param->recv_post_list].sg_list->length);
 					}
-
-					if (user_param->inject_op_cycles > 0) {
+				
+					int32_t *payload = (int32_t *) ctx->rwr[wc_id * user_param->recv_post_list].sg_list->addr;
+					preprocess(payload);
+					
+					if (user_param->inject_op_cycles > 0) {	
 						kill_cyc_handle = kill_cycles(user_param->inject_op_cycles, kill_cyc_handle);
 					}
 

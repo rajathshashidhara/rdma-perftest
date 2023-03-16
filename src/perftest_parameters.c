@@ -755,6 +755,7 @@ static void init_perftest_params(struct perftest_parameters *user_param)
 	user_param->limit_msgrate	= 0;
 	user_param->pkey_index		= 0;
 	user_param->raw_qos		= 0;
+	user_param->payload_content_len = 0;
 	user_param->tcp			= 0;
 	user_param->burst_size		= 0;
 	user_param->typical_pkt_size	= 0;
@@ -2198,6 +2199,7 @@ int parser(struct perftest_parameters *user_param,char *argv[], int argc)
 	static int use_promiscuous_flag = 0;
 	static int use_sniffer_flag = 0;
 	static int raw_mcast_flag = 0;
+	// static int mr_per_qp_flag = 1; // enabling  this flag makes the execution call create_single_mr for each qp. Craeting different payloads for each message.
 	static int mr_per_qp_flag = 0;
 	static int dlid_flag = 0;
 	static int tclass_flag = 0;
@@ -2909,7 +2911,7 @@ int parser(struct perftest_parameters *user_param,char *argv[], int argc)
 				if (injected_op_cycles_flag) {
 					user_param->inject_op_cycles = atoi(optarg);
 					injected_op_cycles_flag = 0;
-				}
+				}			
 				break;
 			default:
 				  fprintf(stderr," Invalid Command or flag.\n");
