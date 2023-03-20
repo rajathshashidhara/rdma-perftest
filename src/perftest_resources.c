@@ -3973,14 +3973,13 @@ static inline void clamp(int32_t *payload){
 
 static inline void computeHash(int32_t *payload){
 	int32_t *hash_payload = payload;
-
+	uint32_t crc;
+	uint32_t data[1];
 	for (int i = 0; i < 16; i++){
-		uint32_t data[4] = {hash_payload[0], hash_payload[1], hash_payload[2], hash_payload[3]};
-		uint32_t crc = crc32(0L, Z_NULL, 0);
-		hash_payload[0] = crc32(crc,(const Bytef*) data, sizeof(data));
-
-		// advance to next 4 inputs
-		hash_payload = hash_payload + 4*sizeof(int32_t);
+		// uint32_t data[4] = {hash_payload[0], hash_payload[1], hash_payload[2], hash_payload[3]};
+		data[0] = hash_payload[i];
+		crc = crc32(0L, Z_NULL, 0);
+		hash_payload[i] = crc32(crc,(const Bytef*) data, sizeof(int32_t)) % 100;
 	}
 }
 
@@ -4009,7 +4008,7 @@ static inline void selectRandom(int32_t *payload){
 // processing about 64 fields for each transformaiton. 
 static inline void preprocess(int32_t *payload){
 	int32_t procs = payload[0]; 
-	printf("procs = %d\n", procs);
+	// printf("procs = %d\n", procs);
 	if (procs & 1){ // 65  fields
 	//	printf("onehot\n");
 		onehot(&payload[1]);
