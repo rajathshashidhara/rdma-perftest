@@ -60,3 +60,7 @@ debian/perftest
 
 #Man pages
 man/
+
+#Temp files
+*~
+config/
