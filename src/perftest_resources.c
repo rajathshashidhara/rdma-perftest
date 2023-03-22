@@ -31,7 +31,6 @@
 
 #include "perftest_resources.h"
 #include "raw_ethernet_resources.h"
-#include <zlib.h>
 
 static enum ibv_wr_opcode opcode_verbs_array[] = {IBV_WR_SEND,IBV_WR_RDMA_WRITE,IBV_WR_RDMA_READ};
 static enum ibv_wr_opcode opcode_atomic_array[] = {IBV_WR_ATOMIC_CMP_AND_SWP,IBV_WR_ATOMIC_FETCH_AND_ADD};
@@ -3942,13 +3941,13 @@ uint32_t pcg32_random_r(pcg32_random_t* rng)
 	return (xorshifted >> rot) | (xorshifted << ((-rot) & 31));
 }
 
-static inline void onehot(int32_t *payload){
+static inline void onehot(int32_t *payload) {
 	for (int i = 0 ; i < 64; i++) {
 		payload[i] = 1 << payload[i];
 	}
 }
 
-static inline void clamp(int32_t *payload){
+static inline void clamp(int32_t *payload) {
 	int32_t *clamp_payload = payload;
 	int32_t in1;
 	int32_t in2;
@@ -3971,15 +3970,24 @@ static inline void clamp(int32_t *payload){
 	}
 }
 
-static inline void computeHash(int32_t *payload){
-	int32_t *hash_payload = payload;
+static inline uint32_t
+crc32c_sse42_u32(uint32_t data, uint32_t init_val)
+{
+	__asm__ volatile(
+			"crc32l %[data], %[init_val];"
+			: [init_val] "+r" (init_val)
+			: [data] "rm" (data));
+	return init_val;
+}
+
+static inline void computeHash(int32_t *payload) {
 	uint32_t crc;
-	uint32_t data[1];
-	for (int i = 0; i < 16; i++){
-		// uint32_t data[4] = {hash_payload[0], hash_payload[1], hash_payload[2], hash_payload[3]};
-		data[0] = hash_payload[i];
-		crc = crc32(0L, Z_NULL, 0);
-		hash_payload[i] = crc32(crc,(const Bytef*) data, sizeof(int32_t)) % 100;
+	for (int i = 0; i < 64; i += 4) {
+		crc = crc32c_sse42_u32(0, payload[i]);
+		crc = crc32c_sse42_u32(crc, payload[i + 1]);
+		crc = crc32c_sse42_u32(crc, payload[i + 2]);
+		crc = crc32c_sse42_u32(crc, payload[i + 3]);
+		payload[i] = crc % 100;
 	}
 }
 
@@ -4005,8 +4013,8 @@ static inline void selectRandom(int32_t *payload){
 	}
 }
 
-// processing about 64 fields for each transformaiton. 
-static inline void preprocess(int32_t *payload){
+// processing about 64 fields for each transformaiton.
+static void preprocess(int32_t *payload, size_t len) {
 	int32_t procs = payload[0]; 
 	// printf("procs = %d\n", procs);
 	if (procs & 1){ // 65  fields
@@ -4124,7 +4132,7 @@ int run_iter_bw_server(struct pingpong_context *ctx, struct perftest_parameters 
 					}
 				
 					int32_t *payload = (int32_t *) ctx->rwr[wc_id * user_param->recv_post_list].sg_list->addr;
-					preprocess(payload);
+					preprocess(payload, ctx->rwr[wc_id * user_param->recv_post_list].sg_list->length);
 					
 					if (user_param->inject_op_cycles > 0) {	
 						kill_cyc_handle = kill_cycles(user_param->inject_op_cycles, kill_cyc_handle);
