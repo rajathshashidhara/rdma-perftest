@@ -3941,13 +3941,15 @@ uint32_t pcg32_random_r(pcg32_random_t* rng)
 	return (xorshifted >> rot) | (xorshifted << ((-rot) & 31));
 }
 
-static inline void onehot(int32_t *payload) {
+static inline void onehot(int32_t *payload)
+{
 	for (int i = 0 ; i < 64; i++) {
 		payload[i] = 1 << payload[i];
 	}
 }
 
-static inline void clamp(int32_t *payload) {
+static inline void clamp(int32_t *payload)
+{
 	int32_t *clamp_payload = payload;
 	int32_t in1;
 	int32_t in2;
@@ -3980,7 +3982,8 @@ crc32c_sse42_u32(uint32_t data, uint32_t init_val)
 	return init_val;
 }
 
-static inline void computeHash(int32_t *payload) {
+static inline void computeHash(int32_t *payload)
+{
 	uint32_t crc;
 	for (int i = 0; i < 64; i += 4) {
 		crc = crc32c_sse42_u32(0, payload[i]);
@@ -3991,7 +3994,8 @@ static inline void computeHash(int32_t *payload) {
 	}
 }
 
-static inline void selectRandom(int32_t *payload){
+static inline void selectRandom(int32_t *payload)
+{
 	int32_t *random_payload = payload;
 	static pcg32_random_t rng;
 	uint32_t res;
@@ -4013,8 +4017,47 @@ static inline void selectRandom(int32_t *payload){
 	}
 }
 
+static inline int compare_ints(const void *a, const void *b)
+{
+	return (*(int *)a - *(int *)b);
+}
+
+static inline void bucketize(uint32_t *payload)
+{
+	int i, j;
+
+	// TODO: how many entries for buckets in representative workloads?
+	uint32_t buckets[] = { 0, 10, 20, 30, 40, 50, 60, 70, 80, 90 };
+
+	// TODO: use bsearch with floor here.
+	for (i = 0; i < 64; i++) {
+		for (j = 0; j < sizeof(buckets)/sizeof(uint32_t); j++) {
+			if (buckets[j] > payload[i])
+				break;
+		}
+		payload[i] = buckets[j - 1];
+	}
+}
+
+static inline void sigrid_hash(int32_t *payload)
+{
+	// TODO: How to get salt, maxvalue as user input?
+	// TODO: requires implementing a specific hash function
+	return;
+}
+
+static inline void positive_modulus(int32_t *payload)
+{
+	int i;
+	int divisor = 1024;
+	
+	for (i = 0; i < 64; i++)
+		payload[i] = payload[i] % divisor;
+}
+
 // processing about 64 fields for each transformaiton.
-static void preprocess(int32_t *payload, size_t len) {
+static void preprocess(int32_t *payload, size_t len)
+{
 	int32_t procs = payload[0]; 
 	// printf("procs = %d\n", procs);
 	if (procs & 1){ // 65  fields
